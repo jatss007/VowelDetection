@@ -1,0 +1,225 @@
+#Data Preprocessing
+
+import os
+from PIL import Image
+import matplotlib.pyplot as plt
+
+import torch
+import torchvision
+from torch.utils.data import DataLoader, Dataset, random_split
+import torchvision.transforms as transforms
+
+#For converting the dataset to torchvision dataset format
+class VowelConsonantDataset(Dataset):
+    def __init__(self, file_path,train=True,transform=None):
+        self.transform = transform
+        self.file_path=file_path
+        self.train=train
+        self.file_names=[file for _,_,files in os.walk(self.file_path) for file in files]
+        self.len = len(self.file_names)
+        if self.train:
+            self.classes_mapping=self.get_classes()
+    def __len__(self):
+        return len(self.file_names)
+    
+    def __getitem__(self, index):
+        file_name=self.file_names[index]
+        image_data=self.pil_loader(self.file_path+"/"+file_name)
+        if self.transform:
+            image_data = self.transform(image_data)
+        if self.train:
+            file_name_splitted=file_name.split("_")
+            Y1 = self.classes_mapping[file_name_splitted[0]]
+            Y2 = self.classes_mapping[file_name_splitted[1]]
+            z1,z2=torch.zeros(10),torch.zeros(10)
+            z1[Y1-10],z2[Y2]=1,1
+            label=torch.stack([z1,z2])
+
+            return image_data, label
+
+        else:
+            return image_data, file_name
+          
+    def pil_loader(self,path):
+        with open(path, 'rb') as f:
+            img = Image.open(f)
+            return img.convert('RGB')
+
+      
+    def get_classes(self):
+        classes=[]
+        for name in self.file_names:
+            name_splitted=name.split("_")
+            classes.extend([name_splitted[0],name_splitted[1]])
+        classes=list(set(classes))
+        classes_mapping={}
+        for i,cl in enumerate(sorted(classes)):
+            classes_mapping[cl]=i
+        return classes_mapping
+
+
+
+
+#importing
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
+import torchvision
+import matplotlib.pyplot as plt
+from torchvision import datasets
+
+import torchvision.transforms as transforms
+
+import numpy as np
+import pandas as pd
+
+import torchvision.models as models
+from tqdm import tqdm_notebook
+
+train_on_gpu = torch.cuda.is_available()
+
+
+#Transforming data
+transform = transforms.Compose([transforms.ToTensor()])
+
+
+full_data = VowelConsonantDataset("/kaggle/input/padhai-hindi-vowel-consonant-classification/train/train",train=True,transform=transform)
+train_size = int(0.9 * len(full_data))
+test_size = len(full_data) - train_size
+train_data, validation_data = random_split(full_data, [train_size, test_size])
+train_loader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
+validation_loader = torch.utils.data.DataLoader(validation_data, batch_size=64, shuffle=True)
+
+test_data = VowelConsonantDataset("/kaggle/input/padhai-hindi-vowel-consonant-classification/test/test",train=False,transform=transform)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=64,shuffle=False)
+
+
+
+dataiter = iter(train_loader)
+images, labels = dataiter.next()
+
+print(images.shape)
+
+print(images[1].shape,labels.shape)
+def imshow(img):
+    npimg = img.numpy()
+    plt.imshow(np.transpose(npimg, (1, 2, 0)))
+    plt.show()
+
+imshow(torchvision.utils.make_grid(images))
+#print(' '.join(str(label[j][0]==1+label[j][1]==1) for j in range(4)))
+    
+
+
+#Lenet Architecture
+
+class LeNet(nn.Module):
+    def __init__(self): 
+        super(LeNet, self).__init__()
+        self.cnn_model = nn.Sequential(
+            nn.Conv2d(3, 6, 5),         # (N, 3, 64, 64) -> (N,  6, 60, 60)
+            nn.Tanh(),
+            nn.AvgPool2d(2, stride=2),  # (N, 6, 60, 60) -> (N,  6, 30, 30)
+            nn.Conv2d(6, 16, 5),        # (N, 6, 30, 30) -> (N, 16, 26, 26)  
+            nn.Tanh(),
+            nn.AvgPool2d(2, stride=2),   # (N,16, 26, 26) -> (N, 16, 13, 13)
+            nn.Conv2d(16, 16, 4),        # (N, 16, 13, 13) -> (N, 16, 10, 10)  
+            nn.Tanh(),
+            nn.AvgPool2d(2, stride=2)   # (N,16, 10, 10) -> (N, 16, 5, 5)
+        )
+        self.fc_model = nn.Sequential(
+            nn.Linear(400,120),         # (N, 400) -> (N, 120)
+            nn.Tanh(),
+            nn.Linear(120,84),          # (N, 120) -> (N, 84)
+            nn.Tanh(),
+            nn.Linear(84,10)            # (N, 84)  -> (N, 10)
+        )
+        
+    def forward(self, x):
+        x = self.cnn_model(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc_model(x)
+        return x
+
+
+
+
+model_v = LeNet()
+model_c = LeNet()
+
+
+loss_fn_v = nn.CrossEntropyLoss()
+loss_fn_c =  nn.CrossEntropyLoss()
+
+opt_v = optim.Adam(model_v.parameters())
+opt_c = optim.Adam(model_c.parameters())
+
+
+#training
+
+%%time
+loss_arr = []
+loss_epoch_arr = []
+max_epochs = 45
+
+for epoch in tqdm_notebook(range(max_epochs),total=max_epochs,unit='epochs'):
+
+    for data in tqdm_notebook(train_loader,total=len(train_loader),unit='batch'):
+
+        img, lab = data
+        img,lab=img.to('cuda:0'),lab.to('cuda:0')
+        out_v = model_v(img)
+        out_c = model_c(img)
+        
+        opt_v.zero_grad()
+        opt_c.zero_grad()
+        
+        val,ind = torch.max(lab[:,0,:],1)
+        val,ind1 = torch.max(lab[:,1,:],1)
+        lab_v = ind
+        lab_c = ind1
+        
+        loss = loss_fn_v(out_v, lab_v)+loss_fn_c(out_c,lab_c)
+        loss.backward()
+        opt_v.step()
+        opt_c.step()
+        
+        loss_arr.append(loss.item())
+        
+    loss_epoch_arr.append(loss.item())
+        
+    #print('Epoch: %d/%d, Test acc: %0.2f, Train acc: %0.2f' % (epoch, max_epochs, evaluation(test_loader), evaluation(train_loader)))
+    
+    
+plt.plot(loss_epoch_arr)
+plt.show()
+
+
+
+#Evaluation
+def evaluation(dataloader,model_v,model_c):
+    total, v,c = 0, 0 ,0
+    for data in dataloader:
+        img, lab = data
+        img,lab=img.to('cuda:0'),lab.to('cuda:0')
+        _,lab1 = torch.max(lab[:,0,:],1)
+        _,lab2 = torch.max(lab[:,1,:],1)
+        _,out_v = torch.max(model_v(img),1)
+        _,out_c = torch.max(model_c(img),1)
+        total += 64
+        v += (out_v==lab1).sum().item()
+        c += (out_c==lab2).sum().item()
+    print('total images:',total)
+    print('correct vowels predictions:',v)
+    print('correct consonants predictions:',c)
+    print('Vowel Accuracy: ',(v/total)*100, '%')
+    print('Consonants Accuracy: ',(c/total)*100,'%')
+
+
+evaluation(train_loader,model_v,model_c)
+    
+
+_,lab1=torch.max(labels[:,0,:],1)
+
